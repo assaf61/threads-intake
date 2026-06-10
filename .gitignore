@@ -1,0 +1,5 @@
+*.log
+*.tmp
+Thumbs.db
+desktop.ini
+worker/enrich.lock

@@ -1,0 +1,245 @@
+// threads-intake main UI. One screen, capture-first:
+// open → tap → capture → "נקלט". Upload happens in the background via the queue.
+import { CONFIG } from "./config.js";
+import { buildNote, extFromMime } from "./note.js";
+import * as Q from "./queue.js";
+import * as Auth from "./auth.js";
+import { uploadFile } from "./graph.js";
+
+const $ = (id) => document.getElementById(id);
+
+// ---------- state ----------
+let sheet = { kind: "text", mediaBlob: null, mediaType: null, mediaFileName: "", sourceUrl: null };
+let recorder = null, recChunks = [], recTimerId = null, recStart = 0;
+let draining = false;
+
+// ---------- toast ----------
+let toastTimer = null;
+function toast(msg, kind = "ok") {
+  const el = $("toast");
+  el.textContent = msg;
+  el.className = `toast show ${kind}`;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.className = "toast"), 2600);
+}
+
+// ---------- status strip ----------
+async function refreshStatus() {
+  const n = await Q.queueCount().catch(() => 0);
+  const qEl = $("chip-queue");
+  qEl.textContent = n ? `בתור: ${n}` : "הכל סונכרן";
+  qEl.classList.toggle("warn", n > 0);
+
+  const aEl = $("chip-auth");
+  if (!Auth.configured()) {
+    aEl.textContent = "חסר client_id";
+    aEl.className = "chip err";
+  } else if (Auth.account()) {
+    const tok = await Auth.getToken();
+    aEl.textContent = tok ? "מחובר" : "התחבר מחדש";
+    aEl.className = tok ? "chip ok" : "chip warn clickable";
+  } else {
+    aEl.textContent = "התחבר";
+    aEl.className = "chip warn clickable";
+  }
+}
+
+// ---------- edit sheet ----------
+function openSheet({ kind, text = "", mediaBlob = null, mediaType = null, mediaFileName = "", sourceUrl = null }) {
+  sheet = { kind, mediaBlob, mediaType, mediaFileName, sourceUrl };
+  $("sheet-text").value = text;
+  const prev = $("sheet-preview");
+  prev.innerHTML = "";
+  if (mediaBlob && mediaType?.startsWith("image/")) {
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(mediaBlob);
+    prev.appendChild(img);
+  } else if (mediaBlob && mediaType?.startsWith("audio/")) {
+    const au = document.createElement("audio");
+    au.controls = true;
+    au.src = URL.createObjectURL(mediaBlob);
+    prev.appendChild(au);
+  }
+  $("sheet").classList.add("open");
+  $("backdrop").classList.add("open");
+  if (!mediaBlob) setTimeout(() => $("sheet-text").focus(), 50);
+}
+
+function closeSheet() {
+  $("sheet").classList.remove("open");
+  $("backdrop").classList.remove("open");
+  $("sheet-text").value = "";
+  $("sheet-preview").innerHTML = "";
+  sheet = { kind: "text", mediaBlob: null, mediaType: null, mediaFileName: "", sourceUrl: null };
+}
+
+const URL_RE = /^https?:\/\/\S+$/;
+
+async function sendCapture() {
+  let text = $("sheet-text").value.trim();
+  let { kind, mediaBlob, mediaType, mediaFileName, sourceUrl } = sheet;
+
+  if (!text && !mediaBlob && !sourceUrl) { toast("אין מה לשלוח", "warn"); return; }
+
+  // Pure URL typed/pasted as text → link capture.
+  if (!sourceUrl && !mediaBlob && URL_RE.test(text)) {
+    kind = "link"; sourceUrl = text; text = "";
+  }
+
+  const mediaExt = mediaBlob ? extFromMime(mediaType, mediaFileName) : null;
+  const note = buildNote({ kind, text, mediaExt, sourceUrl });
+
+  await Q.addCapture({
+    kind,
+    fileName: note.fileName,
+    content: note.content,
+    mediaName: note.mediaName,
+    mediaType,
+    mediaBlob,
+  });
+
+  closeSheet();
+  toast("נקלט ✓");
+  refreshStatus();
+  drain();
+}
+
+// ---------- queue drain ----------
+async function drain() {
+  if (draining || !navigator.onLine || !Auth.configured()) return;
+  draining = true;
+  try {
+    const token = await Auth.getToken();
+    if (!token) return; // chip already shows "התחבר"
+    const items = await Q.listQueue();
+    for (const item of items.sort((a, b) => a.createdAt - b.createdAt)) {
+      try {
+        // Media first: a note that references missing media is a broken capture.
+        if (item.mediaBlob && item.mediaName)
+          await uploadFile(token, `${CONFIG.mediaSubfolder}/${item.mediaName}`, item.mediaBlob, item.mediaType);
+        await uploadFile(token, item.fileName, item.content, "text/markdown");
+        await Q.removeItem(item.id);
+        refreshStatus();
+      } catch (e) {
+        await Q.bumpAttempt(item.id);
+        if (e.retryable) {
+          await new Promise((r) => setTimeout(r, (e.retryAfter || 5) * 1000));
+        } else {
+          console.error("upload failed", item.fileName, e);
+          toast("שגיאת העלאה - נשמר בתור", "warn");
+          break; // leave in queue; next drain retries
+        }
+      }
+    }
+  } finally {
+    draining = false;
+    refreshStatus();
+  }
+}
+
+// ---------- recording ----------
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "";
+    recorder = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 32000 } : undefined);
+    recChunks = [];
+    recorder.ondataavailable = (e) => e.data.size && recChunks.push(e.data);
+    recorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      clearInterval(recTimerId);
+      $("rec-overlay").classList.remove("open");
+      const blob = new Blob(recChunks, { type: recorder.mimeType || "audio/webm" });
+      if (blob.size > 0)
+        openSheet({ kind: "voice", mediaBlob: blob, mediaType: blob.type, mediaFileName: "rec.webm" });
+    };
+    recorder.start();
+    recStart = Date.now();
+    $("rec-timer").textContent = "0:00";
+    $("rec-overlay").classList.add("open");
+    recTimerId = setInterval(() => {
+      const s = Math.floor((Date.now() - recStart) / 1000);
+      $("rec-timer").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    }, 500);
+  } catch (e) {
+    toast("אין גישה למיקרופון", "err");
+  }
+}
+
+// ---------- incoming shares (Android share_target via SW) ----------
+async function consumeShares() {
+  const shares = await Q.takeShares().catch(() => []);
+  for (const s of shares) {
+    if (s.fileBlob) {
+      openSheet({
+        kind: s.fileType?.startsWith("audio/") ? "voice" : "photo",
+        text: [s.title, s.text].filter(Boolean).join("\n"),
+        mediaBlob: s.fileBlob, mediaType: s.fileType, mediaFileName: s.fileName || "",
+      });
+    } else {
+      const url = s.url || (URL_RE.test((s.text || "").trim()) ? s.text.trim() : null);
+      openSheet({
+        kind: url ? "link" : "share",
+        text: [s.title, url ? "" : s.text].filter(Boolean).join("\n"),
+        sourceUrl: url,
+      });
+    }
+    break; // one share per arrival in practice
+  }
+}
+
+// ---------- wire up ----------
+function bind() {
+  $("btn-write").onclick = () => openSheet({ kind: "text" });
+
+  $("btn-record").onclick = startRecording;
+  $("rec-stop").onclick = () => recorder?.state !== "inactive" && recorder.stop();
+  $("rec-cancel").onclick = () => {
+    if (recorder?.state !== "inactive") { recorder.onstop = () => {
+      recorder.stream?.getTracks?.().forEach((t) => t.stop());
+      clearInterval(recTimerId);
+      $("rec-overlay").classList.remove("open");
+    }; recorder.stop(); }
+  };
+
+  $("btn-photo").onclick = () => $("photo-input").click();
+  $("photo-input").onchange = (e) => {
+    const f = e.target.files?.[0];
+    if (f) openSheet({ kind: "photo", mediaBlob: f, mediaType: f.type, mediaFileName: f.name });
+    e.target.value = "";
+  };
+
+  $("btn-paste").onclick = async () => {
+    let text = "";
+    try { text = await navigator.clipboard.readText(); } catch {}
+    openSheet({ kind: "text", text });
+    if (!text) toast("הדבק לתוך תיבת הטקסט", "warn");
+  };
+
+  $("sheet-send").onclick = sendCapture;
+  $("sheet-cancel").onclick = closeSheet;
+  $("backdrop").onclick = closeSheet;
+  $("chip-auth").onclick = () => {
+    if (Auth.configured() && !Auth.account()) Auth.signIn();
+    else if (Auth.configured()) Auth.getToken({ interactive: true });
+  };
+
+  window.addEventListener("online", drain);
+  document.addEventListener("visibilitychange", () => !document.hidden && (refreshStatus(), drain()));
+}
+
+async function main() {
+  bind();
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch((e) => console.warn("sw", e));
+    navigator.serviceWorker.addEventListener("message", (e) => {
+      if (e.data === "share-received") consumeShares();
+    });
+  }
+  await Auth.initAuth();
+  await refreshStatus();
+  await consumeShares();
+  drain();
+}
+
+main();
