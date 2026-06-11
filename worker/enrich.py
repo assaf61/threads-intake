@@ -16,7 +16,14 @@ Usage: python enrich.py [--config path] [--inbox path-override] [--once-name fil
 """
 import sys, os, json, base64, re, time, urllib.request, urllib.error, pathlib, argparse
 
-sys.stdout.reconfigure(encoding="utf-8")
+# pythonw (the scheduled task) has no stdout - guard all console output.
+if sys.stdout:
+    sys.stdout.reconfigure(encoding="utf-8")
+
+
+def say(msg):
+    if sys.stdout:
+        print(msg)
 
 HERE = pathlib.Path(__file__).parent
 LOCK = HERE / "enrich.lock"
@@ -170,7 +177,7 @@ def main():
     key = pathlib.Path(cfg["gemini_key_path"]).read_text(encoding="utf-8-sig").strip().splitlines()[-1].strip()
 
     if LOCK.exists() and time.time() - LOCK.stat().st_mtime < 600:
-        print("lock held - exiting")
+        say("lock held - exiting")
         return
     LOCK.write_text(str(os.getpid()))
     calls = 0
@@ -185,12 +192,12 @@ def main():
             if time.time() - f.stat().st_mtime < cfg["min_age_seconds"] and not args.once_name:
                 continue
             if calls >= cfg["max_calls_per_run"]:
-                print("call cap reached - rest on next run")
+                say("call cap reached - rest on next run")
                 break
             status = enrich_file(cfg, key, f)
             if status in ("enriched", "error"):
                 calls += 1
-            print(f"{f.name}: {status}")
+            say(f"{f.name}: {status}")
     finally:
         LOCK.unlink(missing_ok=True)
 
