@@ -3,3 +3,6 @@
 Thumbs.db
 desktop.ini
 worker/enrich.lock
+
+worker/enrich-config.json
+worker/enrich-log.jsonl
