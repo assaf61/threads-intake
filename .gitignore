@@ -6,3 +6,4 @@ worker/enrich.lock
 
 worker/enrich-config.json
 worker/enrich-log.jsonl
+worker/answer-log.jsonl
