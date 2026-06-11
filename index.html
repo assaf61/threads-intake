@@ -19,6 +19,7 @@
   <header class="strip">
     <span class="title">חוטים</span>
     <span class="chips">
+      <span id="btn-history" class="chip clickable">אחרונים</span>
       <span id="chip-queue" class="chip">…</span>
       <span id="chip-auth" class="chip">…</span>
     </span>
@@ -44,8 +45,37 @@
   </main>
 
   <input type="file" id="photo-input" accept="image/*" hidden>
+  <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
 
   <div id="backdrop" class="backdrop"></div>
+
+  <section id="photo-menu" class="sheet" dir="rtl">
+    <div class="menu-title">מה לצלם?</div>
+    <div class="sheet-actions menu-col">
+      <button id="pm-camera" class="primary">📷 צלם עכשיו במצלמה</button>
+      <button id="pm-gallery" class="primary alt">🖼️ בחר מהגלריה</button>
+      <button id="pm-cancel" class="ghost">ביטול</button>
+    </div>
+  </section>
+
+  <section id="history" class="panel" dir="rtl">
+    <div class="panel-head">
+      <span class="t-h3">חוטים אחרונים</span>
+      <button id="history-close" class="ghost">סגור</button>
+    </div>
+    <div id="history-list" class="history-list"></div>
+    <div id="history-detail" class="history-detail" hidden>
+      <div class="panel-head">
+        <span id="hd-name" class="t-caption"></span>
+        <button id="hd-back" class="ghost">חזרה</button>
+      </div>
+      <div id="hd-media" class="preview"></div>
+      <textarea id="hd-text" rows="10"></textarea>
+      <div class="sheet-actions">
+        <button id="hd-save" class="primary">שמור שינויים</button>
+      </div>
+    </div>
+  </section>
 
   <section id="sheet" class="sheet" dir="rtl">
     <div id="sheet-preview" class="preview"></div>

@@ -1,0 +1,9 @@
+{
+  "inbox": "C:\\Users\\owner\\OneDrive - עלמא ניהול פרויקטים\\Alma Mind\\Alma.Threads\\00-raw\\inbox",
+  "gemini_key_path": "C:\\Users\\owner\\OneDrive - עלמא ניהול פרויקטים\\OD - Alma\\IT\\AI\\AI - מקומי\\Gemini API Key.txt",
+  "models": ["gemini-2.5-flash", "gemini-2.0-flash"],
+  "max_calls_per_run": 6,
+  "min_age_seconds": 60,
+  "max_attempts": 3,
+  "vaults": ["alma-r", "alma-r-proj", "alma-health", "alma-invest", "alma-finance", "alma-daily", "alma-research", "alma-threads", "alma-adinveod"]
+}

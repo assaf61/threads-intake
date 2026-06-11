@@ -39,6 +39,38 @@ export async function uploadFile(token, relPath, content, contentType) {
   return res.json();
 }
 
+// List recent inbox items (for the history panel).
+export async function listInbox(token, top = 20) {
+  const url = `${GRAPH}/me/drive/root:/${encPath(CONFIG.inboxPath)}:/children?$top=${top}&$orderby=lastModifiedDateTime desc`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  await checkResponse(res);
+  return (await res.json()).value;
+}
+
+export async function getFileText(token, relPath) {
+  const res = await fetch(itemUrl(relPath, "/content"), { headers: { Authorization: `Bearer ${token}` } });
+  await checkResponse(res);
+  return res.text();
+}
+
+export async function getFileBlob(token, relPath) {
+  const res = await fetch(itemUrl(relPath, "/content"), { headers: { Authorization: `Bearer ${token}` } });
+  await checkResponse(res);
+  return res.blob();
+}
+
+// Overwrite an existing note in place (used by the history editor).
+export async function putFileReplace(token, relPath, content) {
+  const blob = new Blob([content], { type: "text/markdown" });
+  const res = await fetch(itemUrl(relPath, "/content"), {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "text/markdown" },
+    body: blob,
+  });
+  await checkResponse(res);
+  return res.json();
+}
+
 // Resumable upload session, 5 MB chunks (multiple of 320 KiB per Graph spec).
 async function uploadLarge(token, relPath, blob) {
   const sessRes = await fetch(itemUrl(relPath, "/createUploadSession"), {

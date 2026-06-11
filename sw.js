@@ -2,7 +2,7 @@
 // Uploads do NOT go through the SW — the IndexedDB queue in the page is the
 // single source of truth; the SW only stores incoming shares and serves the shell.
 
-const CACHE = "ti-shell-v1";
+const CACHE = "ti-shell-v3";
 const SHELL = [
   "./", "./index.html", "./app.css", "./tokens.css", "./manifest.webmanifest",
   "./app.js", "./auth.js", "./graph.js", "./queue.js", "./note.js", "./config.js",
@@ -10,7 +10,12 @@ const SHELL = [
 ];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache:"reload" bypasses the HTTP cache so a new SW always precaches fresh files.
+  e.waitUntil(
+    caches.open(CACHE)
+      .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: "reload" }))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener("activate", (e) => {

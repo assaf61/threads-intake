@@ -4,7 +4,7 @@ import { CONFIG } from "./config.js";
 import { buildNote, extFromMime } from "./note.js";
 import * as Q from "./queue.js";
 import * as Auth from "./auth.js";
-import { uploadFile } from "./graph.js";
+import { uploadFile, listInbox, getFileText, getFileBlob, putFileReplace } from "./graph.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -166,6 +166,92 @@ async function startRecording() {
   }
 }
 
+// ---------- history panel (read / listen / edit sent captures) ----------
+const KIND_LABEL = { text: "טקסט", voice: "קול", photo: "תמונה", link: "לינק", share: "שיתוף" };
+let detail = null; // { name, frontmatter, body }
+
+function splitNote(text) {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+  if (!m) return { frontmatter: "", body: text };
+  return { frontmatter: m[0], body: text.slice(m[0].length) };
+}
+
+async function openHistory() {
+  $("history").classList.add("open");
+  $("history-detail").hidden = true;
+  $("history-list").hidden = false;
+  const listEl = $("history-list");
+  listEl.innerHTML = "<div class='t-caption'>טוען…</div>";
+  try {
+    const token = await Auth.getToken();
+    if (!token) { listEl.innerHTML = "<div class='t-caption'>נדרשת התחברות</div>"; return; }
+    const items = (await listInbox(token, 20)).filter((i) => i.name.endsWith(".md"));
+    listEl.innerHTML = "";
+    for (const it of items) {
+      const kind = (it.name.match(/-(text|voice|photo|link|share)-/) || [])[1];
+      const btn = document.createElement("button");
+      btn.className = "history-item";
+      btn.innerHTML = `<span class="hi-kind">${KIND_LABEL[kind] || "חוט"}</span>
+        <span class="hi-snippet">${it.name.replace(".md", "")}</span>`;
+      btn.onclick = () => openDetail(it.name);
+      listEl.appendChild(btn);
+    }
+    if (!items.length) listEl.innerHTML = "<div class='t-caption'>אין חוטים עדיין</div>";
+  } catch (e) {
+    listEl.innerHTML = "<div class='t-caption'>שגיאה בטעינה - נסה שוב</div>";
+    console.error(e);
+  }
+}
+
+async function openDetail(name) {
+  const token = await Auth.getToken();
+  if (!token) return;
+  $("history-list").hidden = true;
+  $("history-detail").hidden = false;
+  $("hd-name").textContent = name;
+  $("hd-text").value = "טוען…";
+  $("hd-media").innerHTML = "";
+  try {
+    const text = await getFileText(token, name);
+    const { frontmatter, body } = splitNote(text);
+    detail = { name, frontmatter, body };
+    $("hd-text").value = body.trim();
+    const mediaMatch = frontmatter.match(/^media:\s*(\S+)/m);
+    if (mediaMatch) {
+      const rel = mediaMatch[1];
+      const blob = await getFileBlob(token, rel);
+      const url = URL.createObjectURL(blob);
+      if (/\.(webm|ogg|m4a|mp3)$/i.test(rel)) {
+        const au = document.createElement("audio");
+        au.controls = true; au.src = url;
+        $("hd-media").appendChild(au);
+      } else {
+        const img = document.createElement("img");
+        img.src = url;
+        $("hd-media").appendChild(img);
+      }
+    }
+  } catch (e) {
+    $("hd-text").value = "שגיאה בקריאת החוט";
+    console.error(e);
+  }
+}
+
+async function saveDetail() {
+  if (!detail) return;
+  const token = await Auth.getToken();
+  if (!token) { toast("נדרשת התחברות", "warn"); return; }
+  try {
+    await putFileReplace(token, detail.name, detail.frontmatter + $("hd-text").value.trim() + "\n");
+    toast("נשמר ✓");
+    $("history-detail").hidden = true;
+    $("history-list").hidden = false;
+  } catch (e) {
+    toast("שגיאת שמירה", "err");
+    console.error(e);
+  }
+}
+
 // ---------- incoming shares (Android share_target via SW) ----------
 async function consumeShares() {
   const shares = await Q.takeShares().catch(() => []);
@@ -202,12 +288,24 @@ function bind() {
     }; recorder.stop(); }
   };
 
-  $("btn-photo").onclick = () => $("photo-input").click();
-  $("photo-input").onchange = (e) => {
+  // צלם opens a submenu: real-time camera or gallery (Assaf's feedback 11/06)
+  const closePhotoMenu = () => { $("photo-menu").classList.remove("open"); $("backdrop").classList.remove("open"); };
+  $("btn-photo").onclick = () => { $("photo-menu").classList.add("open"); $("backdrop").classList.add("open"); };
+  $("pm-camera").onclick = () => { closePhotoMenu(); $("camera-input").click(); };
+  $("pm-gallery").onclick = () => { closePhotoMenu(); $("photo-input").click(); };
+  $("pm-cancel").onclick = closePhotoMenu;
+  const onPhotoPicked = (e) => {
     const f = e.target.files?.[0];
     if (f) openSheet({ kind: "photo", mediaBlob: f, mediaType: f.type, mediaFileName: f.name });
     e.target.value = "";
   };
+  $("photo-input").onchange = onPhotoPicked;
+  $("camera-input").onchange = onPhotoPicked;
+
+  $("btn-history").onclick = openHistory;
+  $("history-close").onclick = () => $("history").classList.remove("open");
+  $("hd-back").onclick = () => { $("history-detail").hidden = true; $("history-list").hidden = false; };
+  $("hd-save").onclick = saveDetail;
 
   $("btn-paste").onclick = async () => {
     let text = "";
@@ -218,7 +316,7 @@ function bind() {
 
   $("sheet-send").onclick = sendCapture;
   $("sheet-cancel").onclick = closeSheet;
-  $("backdrop").onclick = closeSheet;
+  $("backdrop").onclick = () => { closeSheet(); $("photo-menu").classList.remove("open"); };
   $("chip-auth").onclick = () => {
     if (Auth.configured() && !Auth.account()) Auth.signIn();
     else if (Auth.configured()) Auth.getToken({ interactive: true });
